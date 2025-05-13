@@ -1,12 +1,24 @@
 window.Tableify = class Tableify {
   constructor(selector) {
-    this.table = $(selector);
+    this.selector = selector;
     this.filters = {};
     this.currentSort = null;
     this.sortDirection = 0; // 0 for no sort, 1 for ascending, -1 for descending
 
+    window.addEventListener("DOMContentLoaded", () => {
+    this.table = $(this.selector);
+    this.cleanupExistingFilters(); // First clean out any old filters that may be present
     this.initialize();
+  });
   }
+
+  cleanupExistingFilters() {
+  // Remove any old filter elements that may exist
+  this.table.find("thead th .fa-filter").remove();
+  this.table.find("thead th .filter-count").remove();
+  this.table.find("thead th .filter-dropdown").remove();
+  this.table.find("thead th").off("click"); // Remove old event listener
+}
 
   initialize() {
     this.table.find("thead th").each((index, th) => {
