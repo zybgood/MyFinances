@@ -70,8 +70,25 @@ class CustomUserManager(UserManager):
             .annotate(notification_count=(Count("user_notifications")))
         )
 
+    def create_user(self, username, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError("Email must be provided")
+
+        if self.model.objects.filter(email=email).exists():
+            raise ValueError(f"A user with the email '{email}' already exists.")
+
+        email = self.normalize_email(email)
+        return super().create_user(username=username, email=email, password=password, **extra_fields)
+
+    def create_superuser(self, username, email, password=None, **extra_fields):
+        extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("is_superuser", True)
+
+        return self.create_user(username=username, email=email, password=password, **extra_fields)
+
 
 class User(AbstractUser):
+    email = models.EmailField(unique=True)
     objects: CustomUserManager = CustomUserManager()  # type: ignore
 
     logged_in_as_team = models.ForeignKey("Organization", on_delete=models.SET_NULL, null=True, blank=True)
