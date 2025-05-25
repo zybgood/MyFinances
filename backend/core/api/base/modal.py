@@ -139,7 +139,7 @@ def open_modal(request: WebRequest, modal_name, context_type=None, context_value
             context["content_min_length"] = 64
             quota = QuotaLimit.objects.prefetch_related("quota_overrides").get(slug="emails-email_character_count")
             context["content_max_length"] = quota.get_quota_limit(user=request.user, quota_limit=quota)
-            context["email_list"] = Client.filter_by_owner(owner=request.actor).filter(email__isnull=False).values_list("email", flat=True)
+            context["email_list"] = Client.filter_by_owner(owner=request.actor).filter(email__isnull=False).values("email", "name")
             context["invoice_url"] = context_value
 
             if context_type == "invoice_code_send":
