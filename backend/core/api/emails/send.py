@@ -18,6 +18,7 @@ from mypy_boto3_sesv2.type_defs import BulkEmailEntryResultTypeDef
 from backend.core.data.default_email_templates import email_footer
 from backend.decorators import feature_flag_check, web_require_scopes
 from backend.decorators import htmx_only
+from backend.finance.models import Invoice, InvoiceURL
 from backend.models import Client
 from backend.models import EmailSendStatus
 from backend.models import QuotaLimit
@@ -63,6 +64,132 @@ def send_bulk_email_view(request: WebRequest) -> HttpResponse:
     # if not isinstance(check_usage, bool):
     #     return check_usage
     return _send_bulk_email_view(request)
+
+
+@require_POST
+@htmx_only("emails:dashboard")
+@feature_flag_check("areUserEmailsAllowed", status=True, api=True, htmx=True)
+@web_require_scopes("emails:send", False, False, "emails:dashboard")
+def send_invoice_email_view(request: WebRequest, uuid: str) -> HttpResponse:
+    return _send_invoice_email_view(request, uuid)
+
+def _send_invoice_email_view(request: WebRequest, uuid: str) -> HttpResponse:
+    to_list: list[str] = request.POST.getlist("emails")
+    subj: str          = request.POST.get("subject", "")
+    body_raw: str      = request.POST.get("content", "")
+
+    cc_list  = request.POST.get("cc_emails", "").split(",")  if request.POST.get("cc_emails")  else []
+    bcc_list = request.POST.get("bcc_emails", "").split(",") if request.POST.get("bcc_emails") else []
+
+    inv_id = InvoiceURL.objects.filter(uuid=uuid).values_list("invoice_id", flat=True).first()
+    if not inv_id:
+        messages.error(request, "Invalid invoice link")
+        return render(request, "base/toast.html")
+
+    invoice = Invoice.objects.select_related().get(id=inv_id)
+    product_lines = "\n".join(f"- {p}" for p in invoice.items.values_list("name", flat=True))
+
+    client_filter = {"organization": request.user.logged_in_as_team} if request.user.logged_in_as_team else {"user": request.user}
+    clients_qs = Client.objects.filter(**client_filter, email__in=to_list)
+
+    mismatch = validate_bulk_inputs(request=request, emails=to_list, clients=clients_qs, message=body_raw, subject=subj)
+    
+    if mismatch:
+        messages.error(request, mismatch)
+        return render(request, "base/toast.html")
+
+    body_raw += email_footer()
+    body_html = body_raw.replace("\r\n", "<br>").replace("\n", "<br>")
+
+    shared_vars = {
+        "invoice_id"   : invoice.id,
+        "invoice_ref"  : invoice.reference or getattr(invoice, "invoice_number", None) or invoice.id,
+        "due_date"     : invoice.date_due.strftime("%A, %B %d, %Y"),
+        "amount_due"   : invoice.get_total_price(),
+        "currency"     : invoice.currency,
+        "currency_symbol": invoice.get_currency_symbol(),
+        "product_list" : product_lines,
+        "company_name" : invoice.self_company or invoice.self_name or "MyFinances Customer",
+        "invoice_link" : f"{get_var('SITE_URL')}/invoice/{uuid}",
+    }
+
+    bulk_items: list[BulkEmailEmailItem] = []
+    for addr in to_list:
+        client_obj = clients_qs.filter(email=addr).first()
+        recipient_name = (client_obj.name.split()[0] if client_obj else "User")
+
+        txt_render = Template(body_raw ).safe_substitute({"first_name": recipient_name, **shared_vars})
+        html_render = Template(body_html).safe_substitute({"first_name": recipient_name, **shared_vars})
+
+        bulk_items.append(
+            BulkEmailEmailItem(
+                destination=addr,
+                cc=cc_list,
+                bcc=bcc_list,
+                template_data={
+                    "users_name" : recipient_name,
+                    "content_text": txt_render,
+                    "content_html": html_render,
+                },
+            )
+        )
+
+    if get_var("DEBUG", "").lower() == "true":
+        print("[EMAIL-DEBUG]", {"count": len(bulk_items), "subject": subj, "samples": bulk_items[:2]})
+        messages.success(request, f"[DEBUG] Would send {len(bulk_items)} mails")
+        return render(request, "base/toast.html")
+
+    send_res = send_email(
+        destination=to_list,
+        subject=subj,
+        content={
+            "template_name": "user_send_client_email",
+            "template_data": {
+                "subject"     : subj,
+                "sender_name" : request.user.first_name or request.user.email,
+                "sender_id"   : request.user.id,
+                "content_text": Template(body_raw ).safe_substitute(shared_vars),
+                "content_html": Template(body_html).safe_substitute(shared_vars),
+            },
+        },
+        from_address=request.user.email,
+        cc=cc_list,
+        bcc=bcc_list,
+    )
+    if send_res.failed:
+        messages.error(request, send_res.error)
+        return render(request, "base/toast.html")
+
+    entry_list = send_res.response.get("BulkEmailEntryResults", [])
+    pairs: Iterator[tuple[BulkEmailEmailItem, BulkEmailEntryResultTypeDef]] = zip(bulk_items, entry_list)
+
+    status_bulk = EmailSendStatus.objects.bulk_create(
+        [
+            EmailSendStatus(
+                organization=request.user.logged_in_as_team if request.user.logged_in_as_team else None,
+                user=None if request.user.logged_in_as_team else request.user,
+                sent_by=request.user,
+                recipient=item.destination,
+                aws_message_id=res.get("MessageId"),
+                status="pending",
+            )
+            for item, res in pairs
+            if res
+        ]
+    )
+
+    messages.success(request, f"Successfully emailed {len(bulk_items)} people.")
+
+    try:
+        limit_map = {q.slug: q for q in QuotaLimit.objects.filter(slug__in=["emails-single-count", "emails-bulk-count"])}
+        QuotaUsage.objects.bulk_create(
+            [QuotaUsage(user=request.user, quota_limit=limit_map["emails-single-count"], extra_data=s.id) for s in status_bulk] +
+            [QuotaUsage(user=request.user, quota_limit=limit_map["emails-bulk-count"])]
+        )
+    except KeyError:
+        pass
+
+    return render(request, "base/toast.html")
 
 
 def _send_bulk_email_view(request: WebRequest) -> HttpResponse:
