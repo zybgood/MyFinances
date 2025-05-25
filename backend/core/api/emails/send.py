@@ -13,7 +13,7 @@ from django.db.models import QuerySet
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_POST
-from mypy_boto3_sesv2.type_defs import BulkEmailEntryResultTypeDef
+from mypy_boto3_sesv2.type_defs import BulkEmailEntryResultTypeDef, SendEmailResponseTypeDef
 
 from backend.core.data.default_email_templates import email_footer
 from backend.decorators import feature_flag_check, web_require_scopes
@@ -88,8 +88,14 @@ def _send_invoice_email_view(request: WebRequest, uuid) -> HttpResponse:
     invoiceurl_uuid = uuid
     invoice_id = InvoiceURL.objects.filter(uuid=invoiceurl_uuid).values_list("invoice_id", flat=True).first()
 
-    if invoice_id is not None:
-        invoice = Invoice.objects.filter(id=invoice_id).first()
+    if invoice_id is None:
+        messages.error(request, "Invalid Invoice")
+        return render(request, "base/toast.html")
+
+    invoice = Invoice.objects.filter(id=invoice_id).first()
+
+    item_names = invoice.items.values_list("name", flat=True)
+    item_names_list = list(item_names)
 
     if request.user.logged_in_as_team:
         clients = Client.objects.filter(organization=request.user.logged_in_as_team, email__in=emails)
@@ -113,17 +119,15 @@ def _send_invoice_email_view(request: WebRequest, uuid) -> HttpResponse:
         email_data = {
             "first_name": invoice.client_name if invoice.client_name else "User",
             "invoice_id": invoice.id,
-            "invoice_ref": invoice.reference or invoice.invoice_number or invoice.id,
+            "invoice_ref": invoice.reference or invoice.id,
             "due_date": invoice.date_due.strftime("%A, %B %d, %Y"),
             "amount_due": invoice.get_total_price(),
             "currency": invoice.currency,
             "currency_symbol": invoice.get_currency_symbol(),
-            "product_list": [],  # todo
+            "product_list": "\n".join(f"- {item_name}" for item_name in item_names_list),
             "company_name": invoice.self_company or invoice.self_name or "MyFinances Customer",
             "invoice_link": get_var("SITE_URL") + "/invoice/" + invoiceurl_uuid,
         }
-
-        print(email_data)
 
         email_list.append(
             BulkEmailEmailItem(
@@ -138,7 +142,7 @@ def _send_invoice_email_view(request: WebRequest, uuid) -> HttpResponse:
             )
         )
 
-    if get_var("DEBUG", "").lower() == "true":
+    if get_var("DEBUG", "").lower() == "false":
         print(
             {
                 "email_list": email_list,
@@ -175,22 +179,33 @@ def _send_invoice_email_view(request: WebRequest, uuid) -> HttpResponse:
         messages.error(request, EMAIL_SENT.error)
         return render(request, "base/toast.html")
 
-    # todo - fix
-
-    EMAIL_RESPONSES: Iterator[tuple[BulkEmailEmailItem, BulkEmailEntryResultTypeDef]] = zip(
-        email_list, EMAIL_SENT.response.get("BulkEmailEntryResults")  # type: ignore[arg-type]
+    EMAIL_RESPONSES: Iterator[tuple[str, SendEmailResponseTypeDef]] = (
+        (
+            email_item.destination,
+            send_email(
+                destination=email_item.destination,
+                subject=subject,
+                content=email_item.template_data["content_text"],  # type: ignore[index]
+                from_address=request.user.email,
+                cc=email_item.cc,
+                bcc=email_item.bcc,
+            ).response,
+        )
+        for email_item in email_list
     )
+
     if request.user.logged_in_as_team:
         SEND_STATUS_OBJECTS: list[EmailSendStatus] = EmailSendStatus.objects.bulk_create(
             [
                 EmailSendStatus(
                     organization=request.user.logged_in_as_team,
                     sent_by=request.user,
-                    recipient=response[0].destination,
-                    aws_message_id=response[1].get("MessageId"),
+                    recipient=email_address,
+                    aws_message_id=response.get("MessageId"),
                     status="pending",
                 )
-                for response in EMAIL_RESPONSES
+                for email_address, response in EMAIL_RESPONSES
+                if response
             ]
         )
     else:
@@ -199,11 +214,12 @@ def _send_invoice_email_view(request: WebRequest, uuid) -> HttpResponse:
                 EmailSendStatus(
                     user=request.user,
                     sent_by=request.user,
-                    recipient=response[0].destination,
-                    aws_message_id=response[1].get("MessageId"),
+                    recipient=email_address,
+                    aws_message_id=response.get("MessageId"),
                     status="pending",
                 )
-                for response in EMAIL_RESPONSES
+                for email_address, response in EMAIL_RESPONSES
+                if response
             ]
         )
 
