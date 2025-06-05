@@ -174,3 +174,8 @@ module = [
     "celery"
 ]
 ignore_missing_imports = true
+
+#---6.01
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "settings.settings"
+pythonpath = ["."]
