@@ -1,7 +1,8 @@
 import unittest
 from backend.core.data import default_feature_flags
 import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings.settings')
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings.settings")
 
 
 class TestDefaultFeatureFlags(unittest.TestCase):
