@@ -1,5 +1,6 @@
 import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings.settings')
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings.settings")
 
 from django.test import TestCase, RequestFactory
 from unittest.mock import patch, MagicMock
@@ -15,7 +16,6 @@ from backend.finance.api.invoices.edit import change_status
 from types import SimpleNamespace
 
 
-
 class ChangeStatusTests(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
@@ -27,7 +27,7 @@ class ChangeStatusTests(TestCase):
             client_email="client@example.com",
             client_name="Client A",
             currency="USD",
-            date_due=timezone.now() + timedelta(days=30)
+            date_due=timezone.now() + timedelta(days=30),
         )
 
     def add_htmx(self, request):
@@ -35,9 +35,9 @@ class ChangeStatusTests(TestCase):
         request.user = self.user
         request.team_id = None
         request.team = None
-        setattr(request, 'session', {})
+        setattr(request, "session", {})
         messages = FallbackStorage(request)
-        setattr(request, '_messages', messages)
+        setattr(request, "_messages", messages)
 
     def test_successful_status_change(self):
         request = self.factory.post("/")
@@ -64,5 +64,3 @@ class ChangeStatusTests(TestCase):
         self.add_htmx(request)
         response = change_status(request, self.invoice.id, "pending")
         self.assertContains(response, "Invoice status is already pending", status_code=200)
-
-

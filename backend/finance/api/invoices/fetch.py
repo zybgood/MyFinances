@@ -32,7 +32,7 @@ def fetch_all_invoices(request: HtmxHttpRequest):
     if status:
         query &= Q(status=status)
     if due_date:
-        date_range = due_date.split(',')
+        date_range = due_date.split(",")
         date_start = datetime.strptime(date_range[0], "%d/%m/%Y")
         date_end = datetime.strptime(date_range[1], "%d/%m/%Y")
         query &= Q(date_due__range=[date_start, date_end])

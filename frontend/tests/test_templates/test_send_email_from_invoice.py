@@ -2,9 +2,12 @@ import pytest
 from django.template.loader import render_to_string
 from django.utils.html import escape
 import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings.settings')
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings.settings")
 import django
+
 django.setup()
+
 
 @pytest.mark.django_db
 def test_send_email_modal_template_renders_successfully():
@@ -23,7 +26,6 @@ def test_send_email_modal_template_renders_successfully():
     }
 
     rendered = render_to_string("modals/send_email_from_invoice.html", context)
-
 
     assert "form" in rendered
     assert "modal_send_invoice_email-form" in rendered
